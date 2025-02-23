@@ -1,3 +1,18 @@
+# 2.2.8
+
+* Fix: rendering images in web and file generating (thanks to **johannesvedder** for his contributation).
+* Feat: support for create custom pages
+* Chore: added doc comment for `generateWidget` method
+
+
+# 2.2.7
+
+* Chore: deprecated all `onRequestFont` before `2.2.7` and replaced them with `onRequestFontFamily`
+
+# 2.2.6
+
+* Fix: `IMAGE_LOCAL_STORAGE_PATH_PATTERN` was improved to detect more cases
+
 # 2.2.5
 
 * Fix: Color bugs and list block with its leading sizes calculation by @Paul-creator in https://github.com/CatHood0/flutter_quill_to_pdf/pull/12

@@ -3,12 +3,15 @@ import 'package:animated_text_kit/animated_text_kit.dart';
 import 'package:example/example_editor/editor/custom_quill_editor.dart';
 import 'package:example/fonts_loader/fonts_loader.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter_quill_to_pdf/flutter_quill_to_pdf.dart';
 import 'example_editor/toolbar/custom_quill_toolbar.dart';
 
+/// This is the default loader for the fonts created to the example
+/// see this class [here](https://github.com/CatHood0/flutter_quill_to_pdf/blob/master/example/lib/fonts_loader/fonts_loader.dart)
 final FontsLoader loader = FontsLoader();
 
 void main() async {
@@ -87,25 +90,36 @@ class _MyHomePageState extends State<MyHomePage> {
                 PDFConverter pdfConverter = PDFConverter(
                   backMatterDelta: null,
                   frontMatterDelta: null,
+                  isWeb: kIsWeb,
                   document: _quillController.document.toDelta(),
                   fallbacks: [...loader.allFonts()],
-                  onRequestBoldFont: (String fontFamily) async {
-                    return loader.getFontByName(
-                        fontFamily: fontFamily, bold: true);
-                  },
-                  onRequestBoldItalicFont: (String fontFamily) async {
-                    return loader.getFontByName(
-                        fontFamily: fontFamily, bold: true, italic: true);
-                  },
-                  onRequestFallbackFont: (String fontFamily) async {
-                    return null;
-                  },
-                  onRequestItalicFont: (String fontFamily) async {
-                    return loader.getFontByName(
-                        fontFamily: fontFamily, italic: true);
-                  },
-                  onRequestFont: (String fontFamily) async {
-                    return loader.getFontByName(fontFamily: fontFamily);
+                  onRequestFontFamily: (FontFamilyRequest familyRequest) {
+                    final normalFont =
+                        loader.getFontByName(fontFamily: familyRequest.family);
+                    final boldFont = loader.getFontByName(
+                      fontFamily: familyRequest.family,
+                      bold: familyRequest.isBold,
+                    );
+                    final italicFont = loader.getFontByName(
+                      fontFamily: familyRequest.family,
+                      italic: familyRequest.isItalic,
+                    );
+                    final boldItalicFont = loader.getFontByName(
+                      fontFamily: familyRequest.family,
+                      bold: familyRequest.isBold,
+                      italic: familyRequest.isItalic,
+                    );
+                    return FontFamilyResponse(
+                      fontNormalV: normalFont,
+                      boldFontV: boldFont,
+                      italicFontV: italicFont,
+                      boldItalicFontV: boldItalicFont,
+                      fallbacks: [
+                        normalFont,
+                        italicFont,
+                        boldItalicFont,
+                      ],
+                    );
                   },
                   pageFormat: params,
                 );

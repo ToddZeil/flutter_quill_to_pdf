@@ -18,6 +18,7 @@ import 'package:pdf/widgets.dart' as pw;
 import '../../../utils/css.dart';
 import 'attribute_functions.dart';
 import 'document_functions.dart';
+import 'package:http/http.dart' as http;
 
 abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
     implements
@@ -39,10 +40,8 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
   final Delta? frontM;
   final Delta? backM;
   final List<CustomWidget> customBuilders;
-  final Future<pw.Font> Function(String fontFamily)? onRequestFont;
-  final Future<pw.Font> Function(String fontFamily)? onRequestBoldFont;
-  final Future<pw.Font> Function(String fontFamily)? onRequestItalicFont;
-  final Future<pw.Font> Function(String fontFamily)? onRequestBothFont;
+  final FontFamilyResponse Function(FontFamilyRequest familyRequest)?
+      onRequestFontFamily;
   final PDFWidgetBuilder<Line, pw.Widget>? onDetectImageBlock;
   final PDFWidgetBuilder<Line, List<pw.InlineSpan>>?
       onDetectInlineRichTextStyles;
@@ -65,16 +64,13 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
   final double? blockQuotethicknessDividerColor;
   final double? blockQuotePaddingLeft;
   final double? blockQuotePaddingRight;
-  final Future<List<pw.Font>?> Function(String fontFamily)? onRequestFallbacks;
   final int defaultFontSize = Constant
       .DEFAULT_FONT_SIZE; //avoid spans without font sizes not appears in the document
   late final double pageWidth, pageHeight;
+  final bool isWeb;
   PdfConfigurator({
-    this.onRequestBoldFont,
-    this.onRequestBothFont,
-    this.onRequestFallbacks,
-    this.onRequestFont,
-    this.onRequestItalicFont,
+    this.onRequestFontFamily,
+    this.isWeb = false,
     required this.customBuilders,
     required super.document,
     this.blockQuotePaddingLeft,
@@ -115,34 +111,40 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
       width = attributes['width'] ?? pageWidth;
       height = attributes['height'];
     }
-    late final File? file;
-    if (Constant.IMAGE_FROM_NETWORK_URL.hasMatch(data)) {
-      final String url = data;
+
+    File? file;
+    Uint8List? imageBytes;
+
+    if (isWeb) {
+      imageBytes = await _fetchBlobAsBytes(data);
+    } else if (Constant.IMAGE_FROM_NETWORK_URL.hasMatch(data)) {
       final String pathStorage =
-          '${(await getApplicationCacheDirectory()).path}/image (${Random.secure().nextInt(99999) + 50})';
+          '${(await getApplicationCacheDirectory()).path}/image_${Random.secure().nextInt(99999) + 50}';
       try {
         file = File(pathStorage);
-        await Dio().download(url, pathStorage);
+        await Dio().download(data, pathStorage);
       } on DioException {
-        rethrow;
+        return pw.SizedBox.shrink();
       }
     } else if (Constant.IMAGE_LOCAL_STORAGE_PATH_PATTERN.hasMatch(data)) {
       file = File(data);
     } else {
       final Uint8List bytes = base64Decode(data);
       final String pathStorage =
-          '${(await getApplicationCacheDirectory()).path}/image (${Random.secure().nextInt(99999) + 50})';
+          '${(await getApplicationCacheDirectory()).path}/image_${Random.secure().nextInt(99999) + 50}';
       try {
         file = File(pathStorage);
-        file.writeAsBytes(bytes);
+        await file.writeAsBytes(bytes);
       } on DioException {
-        rethrow;
+        return pw.SizedBox.shrink();
       }
     }
 
-    if (!(await file.exists())) {
+    if (isWeb ? (imageBytes == null || imageBytes.isEmpty) 
+        : (file == null || !(await file.exists()))) {
       return pw.SizedBox.shrink();
     }
+
     // verify if exceded height using page format params
     if (height != null && height >= pageHeight) height = pageHeight;
     // verify if exceded width using page format params
@@ -156,7 +158,7 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
           constraints:
               height == null ? const pw.BoxConstraints(maxHeight: 450) : null,
           child: pw.Image(
-            pw.MemoryImage((await file.readAsBytes())),
+            pw.MemoryImage(isWeb ? imageBytes! : (await file!.readAsBytes()) ),
             dpi: 230,
             height: height,
             width: width,
@@ -164,6 +166,15 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
         ),
       ),
     );
+  }
+
+  Future<Uint8List> _fetchBlobAsBytes(String blobUrl) async {
+    final  http.Response response = await http.get(Uri.parse(blobUrl));
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    } else {
+      throw Exception('Failed to load blob image');
+    }
   }
 
   @override
@@ -196,15 +207,18 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
     final double? fontSize = !addFontSize ? null : fontSizeHelper;
     final String content = line.data as String;
     final double? lineSpacing = spacing?.resolveLineHeight();
-    final pw.Font font =
-        await onRequestFont?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY) ??
-            pw.Font.helvetica();
-    final List<pw.Font> fonts = await onRequestFallbacks
-            ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY) ??
-        <pw.Font>[];
+    final FontFamilyResponse fontResponse =
+        onRequestFontFamily?.call(FontFamilyRequest(
+              family: fontFamily ?? Constant.DEFAULT_FONT_FAMILY,
+              isBold: bold,
+              isItalic: italic,
+              isUnderline: underline,
+              isStrike: strike,
+            )) ??
+            FontFamilyResponse.helvetica();
     // Give just the necessary fallbacks for the founded fontFamily
     final pw.TextStyle decided_style = style?.copyWith(
-          font: font,
+          font: fontResponse.fontNormalV,
           fontStyle: italic ? pw.FontStyle.italic : null,
           fontWeight: bold ? pw.FontWeight.bold : null,
           decoration: pw.TextDecoration.combine(<pw.TextDecoration>[
@@ -213,13 +227,10 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
           ]),
           decorationStyle: pw.TextDecorationStyle.solid,
           decorationColor: textColor ?? backgroundTextColor,
-          fontBold: await onRequestBoldFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontItalic: await onRequestItalicFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontBoldItalic: await onRequestBothFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontFallback: fonts,
+          fontBold: fontResponse.boldFontV,
+          fontItalic: fontResponse.italicFontV,
+          fontBoldItalic: fontResponse.boldItalicFontV,
+          fontFallback: fontResponse.fallbacks,
           fontSize:
               !addFontSize ? null : fontSize ?? defaultFontSize.toDouble(),
           lineSpacing: lineSpacing,
@@ -227,20 +238,17 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
           background: pw.BoxDecoration(color: backgroundTextColor),
         ) ??
         defaultTextStyle.copyWith(
-          font: font,
+          font: fontResponse.fontNormalV,
           decoration: pw.TextDecoration.combine(<pw.TextDecoration>[
             if (strike) pw.TextDecoration.lineThrough,
             if (underline) pw.TextDecoration.underline,
           ]),
           decorationStyle: pw.TextDecorationStyle.solid,
           decorationColor: textColor ?? backgroundTextColor,
-          fontBold: await onRequestBoldFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontItalic: await onRequestItalicFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontBoldItalic: await onRequestBothFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontFallback: fonts,
+          fontBold: fontResponse.boldFontV,
+          fontItalic: fontResponse.italicFontV,
+          fontBoldItalic: fontResponse.boldItalicFontV,
+          fontFallback: fontResponse.fallbacks,
           fontSize:
               !addFontSize ? null : fontSize ?? defaultFontSize.toDouble(),
           lineSpacing: lineSpacing,
@@ -343,12 +351,15 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
     final bool underline = line.attributes?['underline'] ?? false;
     final String href = line.attributes!['link'];
     final String hrefContent = line.data as String;
-    final pw.Font font =
-        await onRequestFont?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY) ??
-            pw.Font.helvetica();
-    final List<pw.Font> fonts = await onRequestFallbacks
-            ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY) ??
-        <pw.Font>[];
+    final FontFamilyResponse fontResponse =
+        onRequestFontFamily?.call(FontFamilyRequest(
+              family: fontFamily ?? Constant.DEFAULT_FONT_FAMILY,
+              isBold: bold,
+              isItalic: italic,
+              isUnderline: underline,
+              isStrike: strike,
+            )) ??
+            FontFamilyResponse.helvetica();
     spans.add(
       pw.TextSpan(
         annotation: pw.AnnotationLink(href),
@@ -366,14 +377,11 @@ abstract class PdfConfigurator<T, D> extends ConverterConfigurator<T, D>
           ]),
           decorationStyle: pw.TextDecorationStyle.solid,
           decorationColor: defaultLinkColor,
-          font: font,
-          fontBold: await onRequestBoldFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontItalic: await onRequestItalicFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontBoldItalic: await onRequestBothFont
-              ?.call(fontFamily ?? Constant.DEFAULT_FONT_FAMILY),
-          fontFallback: fonts,
+          font: fontResponse.fontNormalV,
+          fontBold: fontResponse.boldFontV,
+          fontItalic: fontResponse.italicFontV,
+          fontBoldItalic: fontResponse.boldItalicFontV,
+          fontFallback: fontResponse.fallbacks,
           fontSize:
               !addFontSize ? null : fontSize ?? defaultFontSize.toDouble(),
           lineSpacing: lineSpacing,
